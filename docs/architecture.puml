@@ -1,0 +1,155 @@
+@startuml functional_task_supervisor_architecture
+
+!define ENTITY class
+!define INTERFACE interface
+
+package "FunctionalTaskSupervisor" {
+  
+  ENTITY Stage {
+    - name : String
+    - result : Result<Success, Failure>
+    + initialize(name)
+    + execute() : Result
+    + performed?() : Boolean
+    + success?() : Boolean
+    + failure?() : Boolean
+    + value() : Any
+    + error() : Any
+    + reset!() : void
+    # validate_preconditions() : Result
+    # perform_work() : Result
+    # handle_failure(failure) : Result
+    # preconditions_met?() : Boolean
+    # recoverable?(failure) : Boolean
+    # retry_with_backoff() : Result
+  }
+
+  ENTITY Task {
+    - stages : Array<Stage>
+    - results : Array<Result>
+    - current_stage_index : Integer
+    + initialize()
+    + add_stage(stage) : self
+    + run() : Result
+    + run_conditional() : Result
+    + successful_results() : Array<Result>
+    + failed_results() : Array<Result>
+    + all_successful?() : Boolean
+    + any_failed?() : Boolean
+    + reset!() : void
+    # execute_stage(stage) : Result
+    # determine_next_stage(result, index) : Integer
+  }
+
+  package "Effects" {
+    
+    ENTITY StateHandler <<module>> {
+      + run_with_state() : Result
+    }
+
+    ENTITY ResolveHandler <<module>> {
+      + log(message, level) : void
+      + repo() : Repository
+      + configuration() : Hash
+    }
+
+    ENTITY StateTaskRunner {
+      + call(task) : Hash
+    }
+
+    ENTITY DependencyProvider {
+      - logger : Logger
+      - repository : Repository
+      - config : Hash
+      + initialize(logger, repository, config)
+      + call(task) : Result
+    }
+
+    ENTITY TaskRunner {
+      - logger : Logger
+      - repository : Repository
+      - config : Hash
+      + initialize(logger, repository, config)
+      + call(task) : Hash
+    }
+  }
+}
+
+package "dry-monads" {
+  ENTITY "Result<Success, Failure>" <<monad>> {
+    + bind(block) : Result
+    + fmap(block) : Result
+    + value!() : Any
+    + value_or(default) : Any
+    + success?() : Boolean
+    + failure?() : Boolean
+  }
+
+  ENTITY Success {
+    - value : Any
+  }
+
+  ENTITY Failure {
+    - error : Any
+  }
+}
+
+package "dry-effects" {
+  ENTITY "State Effect" <<effect>> {
+    + with_state(initial) : [state, result]
+  }
+
+  ENTITY "Resolve Effect" <<effect>> {
+    + provide(dependencies) : result
+  }
+}
+
+' Relationships
+Task "1" *-- "many" Stage : contains
+Stage ..> "Result<Success, Failure>" : returns
+Task ..> "Result<Success, Failure>" : returns
+
+StateHandler ..> "State Effect" : uses
+ResolveHandler ..> "Resolve Effect" : uses
+
+StateTaskRunner ..> StateHandler : handles
+DependencyProvider ..> ResolveHandler : handles
+TaskRunner ..> StateHandler : handles
+TaskRunner ..> ResolveHandler : handles
+
+"Result<Success, Failure>" <|-- Success
+"Result<Success, Failure>" <|-- Failure
+
+' Notes
+note right of Stage
+  Stage represents a single
+  unit of work with a Result.
+  
+  States:
+  - nil: not run yet
+  - Success: completed
+  - Failure: failed
+end note
+
+note right of Task
+  Task orchestrates multiple
+  stages and determines the
+  next stage to execute.
+  
+  Uses Do notation for
+  clean composition.
+end note
+
+note bottom of StateHandler
+  Provides state tracking
+  for stage execution
+  history and metadata.
+end note
+
+note bottom of ResolveHandler
+  Provides dependency
+  injection for logger,
+  repository, and config.
+end note
+
+@enduml
