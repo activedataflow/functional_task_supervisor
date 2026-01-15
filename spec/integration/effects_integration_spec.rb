@@ -1,20 +1,43 @@
 require 'spec_helper'
 
 RSpec.describe 'Effects Integration' do
+  # Define reusable stage classes
+  let(:simple_stage_class) do
+    Class.new(FunctionalTaskSupervisor::Stage) do
+      def self.name
+        'SimpleStage'
+      end
+    end
+  end
+
   describe 'State tracking' do
+    let(:stage1_class) do
+      Class.new(FunctionalTaskSupervisor::Stage) do
+        def self.name
+          'Stage1'
+        end
+      end
+    end
+
+    let(:stage2_class) do
+      Class.new(FunctionalTaskSupervisor::Stage) do
+        def self.name
+          'Stage2'
+        end
+      end
+    end
+
     let(:task_class) do
+      s1 = stage1_class
+      s2 = stage2_class
       Class.new(FunctionalTaskSupervisor::Task) do
         include FunctionalTaskSupervisor::Effects::StateHandler
+
+        define_method(:stage_klass_sequence) { [s1, s2] }
       end
     end
 
     let(:task) { task_class.new }
-    let(:stage1) { FunctionalTaskSupervisor::Stage.new('stage1') }
-    let(:stage2) { FunctionalTaskSupervisor::Stage.new('stage2') }
-
-    before do
-      task.add_stage(stage1).add_stage(stage2)
-    end
 
     it 'tracks stage execution history' do
       runner = FunctionalTaskSupervisor::Effects::StateTaskRunner.new
@@ -46,9 +69,13 @@ RSpec.describe 'Effects Integration' do
     let(:repository) { double('Repository') }
     let(:config) { { timeout: 30, retries: 3 } }
 
-    let(:stage_class) do
+    let(:logging_stage_class) do
       Class.new(FunctionalTaskSupervisor::Stage) do
         include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+        def self.name
+          'TestStage'
+        end
 
         private
 
@@ -59,8 +86,14 @@ RSpec.describe 'Effects Integration' do
       end
     end
 
-    let(:stage) { stage_class.new('test_stage') }
-    let(:task) { FunctionalTaskSupervisor::Task.new.add_stage(stage) }
+    let(:task_class) do
+      stage_klass = logging_stage_class
+      Class.new(FunctionalTaskSupervisor::Task) do
+        define_method(:stage_klass_sequence) { [stage_klass] }
+      end
+    end
+
+    let(:task) { task_class.new }
 
     it 'provides dependencies to stages' do
       provider = FunctionalTaskSupervisor::Effects::DependencyProvider.new(
@@ -72,7 +105,7 @@ RSpec.describe 'Effects Integration' do
       result = provider.call(task)
 
       expect(result).to be_success
-      expect(logger).to have_received(:info).with('[test_stage] Executing stage')
+      expect(logger).to have_received(:info).with('[teststage] Executing stage')
     end
 
     it 'makes config accessible in stages' do
@@ -95,15 +128,13 @@ RSpec.describe 'Effects Integration' do
     let(:repository) { double('Repository') }
     let(:config) { { max_retries: 3 } }
 
-    let(:task_class) do
-      Class.new(FunctionalTaskSupervisor::Task) do
-        include FunctionalTaskSupervisor::Effects::StateHandler
-      end
-    end
-
-    let(:stage_class) do
+    let(:advanced_stage_class) do
       Class.new(FunctionalTaskSupervisor::Stage) do
         include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+        def self.name
+          'AdvancedStage'
+        end
 
         private
 
@@ -114,13 +145,33 @@ RSpec.describe 'Effects Integration' do
       end
     end
 
-    let(:task) { task_class.new }
-    let(:stage1) { stage_class.new('stage1') }
-    let(:stage2) { stage_class.new('stage2') }
-
-    before do
-      task.add_stage(stage1).add_stage(stage2)
+    let(:stage1_class) do
+      Class.new(advanced_stage_class) do
+        def self.name
+          'Stage1'
+        end
+      end
     end
+
+    let(:stage2_class) do
+      Class.new(advanced_stage_class) do
+        def self.name
+          'Stage2'
+        end
+      end
+    end
+
+    let(:task_class) do
+      s1 = stage1_class
+      s2 = stage2_class
+      Class.new(FunctionalTaskSupervisor::Task) do
+        include FunctionalTaskSupervisor::Effects::StateHandler
+
+        define_method(:stage_klass_sequence) { [s1, s2] }
+      end
+    end
+
+    let(:task) { task_class.new }
 
     it 'combines state tracking and dependency injection' do
       runner = FunctionalTaskSupervisor::Effects::TaskRunner.new(
@@ -146,6 +197,10 @@ RSpec.describe 'Effects Integration' do
       Class.new(FunctionalTaskSupervisor::Stage) do
         include FunctionalTaskSupervisor::Effects::ResolveHandler
 
+        def self.name
+          'FailingStage'
+        end
+
         private
 
         def perform_work
@@ -156,24 +211,22 @@ RSpec.describe 'Effects Integration' do
     end
 
     let(:task_class) do
+      stage_klass = failing_stage_class
       Class.new(FunctionalTaskSupervisor::Task) do
         include FunctionalTaskSupervisor::Effects::StateHandler
+
+        define_method(:stage_klass_sequence) { [stage_klass] }
       end
     end
 
     let(:task) { task_class.new }
-    let(:stage) { failing_stage_class.new('failing_stage') }
-
-    before do
-      task.add_stage(stage)
-    end
 
     it 'tracks failures in state' do
       runner = FunctionalTaskSupervisor::Effects::TaskRunner.new(logger: logger)
       result = runner.call(task)
 
-      expect(result[:history]).to eq(['failing_stage'])
-      expect(result[:metadata]['failing_stage'][:success]).to be false
+      expect(result[:history]).to eq(['failingstage'])
+      expect(result[:metadata]['failingstage'][:success]).to be false
       expect(result[:result]).to be_failure
     end
 
@@ -181,7 +234,7 @@ RSpec.describe 'Effects Integration' do
       runner = FunctionalTaskSupervisor::Effects::TaskRunner.new(logger: logger)
       runner.call(task)
 
-      expect(logger).to have_received(:warn).with('[failing_stage] About to fail')
+      expect(logger).to have_received(:warn).with('[failingstage] About to fail')
     end
   end
 end

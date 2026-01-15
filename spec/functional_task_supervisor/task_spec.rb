@@ -1,18 +1,48 @@
 require 'spec_helper'
 
 RSpec.describe FunctionalTaskSupervisor::Task do
-  let(:task) { described_class.new }
-  let(:stage1) { FunctionalTaskSupervisor::Stage.new('stage1') }
-  let(:stage2) { FunctionalTaskSupervisor::Stage.new('stage2') }
-  let(:stage3) { FunctionalTaskSupervisor::Stage.new('stage3') }
+  # Define stage classes for testing
+  let(:stage1_class) do
+    Class.new(FunctionalTaskSupervisor::Stage) do
+      def self.name
+        'Stage1'
+      end
+    end
+  end
+
+  let(:stage2_class) do
+    Class.new(FunctionalTaskSupervisor::Stage) do
+      def self.name
+        'Stage2'
+      end
+    end
+  end
+
+  let(:stage3_class) do
+    Class.new(FunctionalTaskSupervisor::Stage) do
+      def self.name
+        'Stage3'
+      end
+    end
+  end
+
+  # Create a test task class with configurable stages
+  let(:test_task_class) do
+    stages = [stage1_class, stage2_class, stage3_class]
+    Class.new(described_class) do
+      define_method(:stage_klass_sequence) { stages }
+    end
+  end
+
+  let(:task) { test_task_class.new }
 
   describe '#initialize' do
-    it 'creates a task with empty stages' do
-      expect(task.stages).to be_empty
-    end
-
     it 'creates a task with empty results' do
       expect(task.results).to be_empty
+    end
+
+    it 'creates a task with empty executed_stages' do
+      expect(task.executed_stages).to be_empty
     end
 
     it 'initializes current_stage_index to 0' do
@@ -20,27 +50,18 @@ RSpec.describe FunctionalTaskSupervisor::Task do
     end
   end
 
-  describe '#add_stage' do
-    it 'adds a stage to the task' do
-      task.add_stage(stage1)
-      expect(task.stages).to include(stage1)
+  describe '#stage_klass_sequence' do
+    it 'raises NotImplementedError when not overridden' do
+      base_task = described_class.new
+      expect { base_task.stage_klass_sequence }.to raise_error(NotImplementedError)
     end
 
-    it 'returns self for chaining' do
-      expect(task.add_stage(stage1)).to eq(task)
-    end
-
-    it 'allows chaining multiple stages' do
-      task.add_stage(stage1).add_stage(stage2).add_stage(stage3)
-      expect(task.stages.length).to eq(3)
+    it 'returns stage classes when properly implemented' do
+      expect(task.stage_klass_sequence).to eq([stage1_class, stage2_class, stage3_class])
     end
   end
 
   describe '#run' do
-    before do
-      task.add_stage(stage1).add_stage(stage2).add_stage(stage3)
-    end
-
     it 'executes all stages' do
       result = task.run
       expect(result).to be_success
@@ -49,6 +70,11 @@ RSpec.describe FunctionalTaskSupervisor::Task do
     it 'stores results for all stages' do
       task.run
       expect(task.results.length).to eq(3)
+    end
+
+    it 'tracks executed stages' do
+      task.run
+      expect(task.executed_stages.length).to eq(3)
     end
 
     it 'returns a Success with completed stages' do
@@ -61,45 +87,48 @@ RSpec.describe FunctionalTaskSupervisor::Task do
       expect(result.value![:total_stages]).to eq(3)
     end
 
-    it 'marks all stages as performed' do
+    it 'marks all executed stages as performed' do
       task.run
-      expect(stage1.performed?).to be true
-      expect(stage2.performed?).to be true
-      expect(stage3.performed?).to be true
+      expect(task.executed_stages.all?(&:performed?)).to be true
     end
 
     context 'when a stage fails' do
-      let(:failing_stage) do
+      let(:failing_stage_class) do
         Class.new(FunctionalTaskSupervisor::Stage) do
+          def self.name
+            'FailingStage'
+          end
+
           private
 
           def perform_work
             Dry::Monads::Failure(error: 'Stage failed')
           end
-        end.new('failing_stage')
+        end
       end
 
-      before do
-        task.add_stage(failing_stage)
+      let(:task_with_failure_class) do
+        stages = [stage1_class, stage2_class, stage3_class, failing_stage_class]
+        Class.new(described_class) do
+          define_method(:stage_klass_sequence) { stages }
+        end
       end
+
+      let(:failing_task) { task_with_failure_class.new }
 
       it 'stops execution and returns failure' do
-        result = task.run
+        result = failing_task.run
         expect(result).to be_failure
       end
 
       it 'includes the failure in results' do
-        task.run
-        expect(task.results.last).to be_failure
+        failing_task.run
+        expect(failing_task.results.last).to be_failure
       end
     end
   end
 
   describe '#run_conditional' do
-    before do
-      task.add_stage(stage1).add_stage(stage2).add_stage(stage3)
-    end
-
     it 'executes stages conditionally' do
       result = task.run_conditional
       expect(result).to be_success
@@ -116,157 +145,213 @@ RSpec.describe FunctionalTaskSupervisor::Task do
     end
 
     context 'with custom next stage logic' do
-      let(:custom_task) do
+      let(:custom_task_class) do
+        stages = [stage1_class, stage2_class, stage3_class]
         Class.new(described_class) do
+          define_method(:stage_klass_sequence) { stages }
+
           private
 
           def determine_next_stage(result, current_index)
             # Skip stage2 (index 1)
             next_index = current_index + 1
             next_index = next_index + 1 if next_index == 1
-            next_index < stages.length ? next_index : nil
+            next_index < stage_klass_sequence.length ? next_index : nil
           end
-        end.new
+        end
       end
 
-      before do
-        custom_task.add_stage(stage1).add_stage(stage2).add_stage(stage3)
-      end
+      let(:custom_task) { custom_task_class.new }
 
       it 'follows custom stage execution logic' do
         result = custom_task.run_conditional
         expect(result).to be_success
         expect(custom_task.results.length).to eq(2)
-        expect(stage2.performed?).to be false
       end
     end
   end
 
   describe '#successful_results' do
-    before do
-      task.add_stage(stage1).add_stage(stage2)
+    let(:two_stage_task_class) do
+      stages = [stage1_class, stage2_class]
+      Class.new(described_class) do
+        define_method(:stage_klass_sequence) { stages }
+      end
     end
 
+    let(:two_stage_task) { two_stage_task_class.new }
+
     it 'returns only successful results' do
-      task.run
-      expect(task.successful_results.length).to eq(2)
+      two_stage_task.run
+      expect(two_stage_task.successful_results.length).to eq(2)
     end
 
     context 'with mixed results' do
-      let(:failing_stage) do
+      let(:failing_stage_class) do
         Class.new(FunctionalTaskSupervisor::Stage) do
+          def self.name
+            'FailingStage'
+          end
+
           private
 
           def perform_work
             Dry::Monads::Failure(error: 'Failed')
           end
-        end.new('failing')
+        end
       end
 
-      before do
-        task.add_stage(failing_stage)
+      let(:mixed_task_class) do
+        stages = [stage1_class, stage2_class, failing_stage_class]
+        Class.new(described_class) do
+          define_method(:stage_klass_sequence) { stages }
+        end
       end
+
+      let(:mixed_task) { mixed_task_class.new }
 
       it 'filters out failed results' do
-        task.run rescue nil
-        successful = task.successful_results
+        mixed_task.run rescue nil
+        successful = mixed_task.successful_results
         expect(successful.all?(&:success?)).to be true
       end
     end
   end
 
   describe '#failed_results' do
-    let(:failing_stage) do
+    let(:failing_stage_class) do
       Class.new(FunctionalTaskSupervisor::Stage) do
+        def self.name
+          'FailingStage'
+        end
+
         private
 
         def perform_work
           Dry::Monads::Failure(error: 'Failed')
         end
-      end.new('failing')
+      end
     end
 
-    before do
-      task.add_stage(stage1).add_stage(failing_stage)
+    let(:task_with_failure_class) do
+      stages = [stage1_class, failing_stage_class]
+      Class.new(described_class) do
+        define_method(:stage_klass_sequence) { stages }
+      end
     end
+
+    let(:failing_task) { task_with_failure_class.new }
 
     it 'returns only failed results' do
-      task.run rescue nil
-      failed = task.failed_results
+      failing_task.run rescue nil
+      failed = failing_task.failed_results
       expect(failed.all?(&:failure?)).to be true
     end
   end
 
   describe '#all_successful?' do
-    before do
-      task.add_stage(stage1).add_stage(stage2)
+    let(:two_stage_task_class) do
+      stages = [stage1_class, stage2_class]
+      Class.new(described_class) do
+        define_method(:stage_klass_sequence) { stages }
+      end
     end
 
+    let(:two_stage_task) { two_stage_task_class.new }
+
     it 'returns true when all stages succeed' do
-      task.run
-      expect(task.all_successful?).to be true
+      two_stage_task.run
+      expect(two_stage_task.all_successful?).to be true
     end
 
     it 'returns false when any stage fails' do
-      failing_stage = Class.new(FunctionalTaskSupervisor::Stage) do
+      failing_stage_class = Class.new(FunctionalTaskSupervisor::Stage) do
+        def self.name
+          'FailingStage'
+        end
+
         private
 
         def perform_work
           Dry::Monads::Failure(error: 'Failed')
         end
-      end.new('failing')
+      end
 
-      task.add_stage(failing_stage)
-      task.run rescue nil
-      expect(task.all_successful?).to be false
+      task_class = Class.new(described_class) do
+        define_method(:stage_klass_sequence) { [FunctionalTaskSupervisor::Stage, failing_stage_class] }
+      end
+
+      failing_task = task_class.new
+      failing_task.run rescue nil
+      expect(failing_task.all_successful?).to be false
     end
   end
 
   describe '#any_failed?' do
-    before do
-      task.add_stage(stage1).add_stage(stage2)
+    let(:two_stage_task_class) do
+      stages = [stage1_class, stage2_class]
+      Class.new(described_class) do
+        define_method(:stage_klass_sequence) { stages }
+      end
     end
 
+    let(:two_stage_task) { two_stage_task_class.new }
+
     it 'returns false when all stages succeed' do
-      task.run
-      expect(task.any_failed?).to be false
+      two_stage_task.run
+      expect(two_stage_task.any_failed?).to be false
     end
 
     it 'returns true when any stage fails' do
-      failing_stage = Class.new(FunctionalTaskSupervisor::Stage) do
+      failing_stage_class = Class.new(FunctionalTaskSupervisor::Stage) do
+        def self.name
+          'FailingStage'
+        end
+
         private
 
         def perform_work
           Dry::Monads::Failure(error: 'Failed')
         end
-      end.new('failing')
+      end
 
-      task.add_stage(failing_stage)
-      task.run rescue nil
-      expect(task.any_failed?).to be true
+      task_class = Class.new(described_class) do
+        define_method(:stage_klass_sequence) { [FunctionalTaskSupervisor::Stage, failing_stage_class] }
+      end
+
+      failing_task = task_class.new
+      failing_task.run rescue nil
+      expect(failing_task.any_failed?).to be true
     end
   end
 
   describe '#reset!' do
-    before do
-      task.add_stage(stage1).add_stage(stage2)
-      task.run
+    let(:two_stage_task_class) do
+      stages = [stage1_class, stage2_class]
+      Class.new(described_class) do
+        define_method(:stage_klass_sequence) { stages }
+      end
     end
 
-    it 'resets all stages' do
-      task.reset!
-      expect(stage1.performed?).to be false
-      expect(stage2.performed?).to be false
+    let(:reset_task) { two_stage_task_class.new }
+
+    before do
+      reset_task.run
+    end
+
+    it 'resets all executed stages' do
+      reset_task.reset!
+      expect(reset_task.executed_stages).to be_empty
     end
 
     it 'clears results' do
-      task.reset!
-      expect(task.results).to be_empty
+      reset_task.reset!
+      expect(reset_task.results).to be_empty
     end
 
     it 'resets current_stage_index' do
-      task.reset!
-      expect(task.current_stage_index).to eq(0)
+      reset_task.reset!
+      expect(reset_task.current_stage_index).to eq(0)
     end
   end
 end

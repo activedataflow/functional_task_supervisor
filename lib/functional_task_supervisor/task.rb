@@ -5,49 +5,56 @@ module FunctionalTaskSupervisor
   class Task
     include Dry::Monads[:result, :do]
 
-    attr_reader :results, :current_stage_index
+    attr_reader :results, :current_stage_index, :executed_stages
 
     def initialize
       @results = []
+      @executed_stages = []
       @current_stage_index = 0
     end
 
-    # Add a stage to the task
-    def stages
-      Failure('Subclasses must implement the stages method')
+    # Override in subclasses to define the sequence of stage classes
+    def stage_klass_sequence
+      raise NotImplementedError, 'Subclasses must implement the stage_klass_sequence method'
     end
 
     # Run all stages in sequence
     def run
       @results = []
+      @executed_stages = []
       @current_stage_index = 0
 
       stage_klass_sequence.each_with_index do |stage_klass, index|
         @current_stage_index = index
         stage = stage_klass.new(task: self)
-        stage_result = yield execute_stage(stage)
+        @executed_stages << stage
+        stage_result = execute_stage(stage)
         @results << stage_result
+        yield stage_result  # Unwraps Success or halts on Failure
       end
 
       Success(
         results: @results,
-        completed: stages.map(&:name),
-        total_stages: stages.length
+        completed: @executed_stages.map(&:name),
+        total_stages: stage_klass_sequence.length
       )
     end
 
     # Run stages with conditional execution
     def run_conditional
       @results = []
+      @executed_stages = []
       @current_stage_index = 0
 
-      while @current_stage_index < stages.length
+      while @current_stage_index < stage_klass_sequence.length
         stage = stage_klass_sequence[@current_stage_index].new(task: self)
-        stage_result = yield execute_stage(stage)
+        @executed_stages << stage
+        stage_result = execute_stage(stage)
         @results << stage_result
+        unwrapped = yield stage_result  # Unwraps Success or halts on Failure
 
         # Determine next stage based on result
-        next_index = determine_next_stage(stage_result, @current_stage_index)
+        next_index = determine_next_stage(unwrapped, @current_stage_index)
 
         if next_index.nil?
           # No more stages to execute
@@ -59,7 +66,7 @@ module FunctionalTaskSupervisor
 
       Success(
         results: @results,
-        final_stage: stages[@current_stage_index].name,
+        final_stage: @executed_stages.last&.name,
         executed_stages: @results.length
       )
     end
@@ -84,9 +91,10 @@ module FunctionalTaskSupervisor
       @results.any?(&:failure?)
     end
 
-    # Reset all stages
+    # Reset task state
     def reset!
-      @stages.each(&:reset!)
+      @executed_stages.each(&:reset!)
+      @executed_stages = []
       @results = []
       @current_stage_index = 0
     end
@@ -94,7 +102,7 @@ module FunctionalTaskSupervisor
     private
 
     # Execute a single stage
-    def execute_stage(stage_klass)
+    def execute_stage(stage)
       stage.execute
       stage.result
     end
@@ -103,7 +111,7 @@ module FunctionalTaskSupervisor
     def determine_next_stage(result, current_index)
       # Default: proceed to next stage sequentially
       next_index = current_index + 1
-      next_index < stages.length ? next_index : nil
+      next_index < stage_klass_sequence.length ? next_index : nil
     end
   end
 end

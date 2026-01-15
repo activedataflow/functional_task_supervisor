@@ -1,15 +1,25 @@
 require 'spec_helper'
 
 RSpec.describe FunctionalTaskSupervisor::Stage do
-  let(:stage) { described_class.new('test_stage') }
+  let(:mock_task) { double('Task') }
+  let(:stage) { described_class.new(task: mock_task, name: 'test_stage') }
 
   describe '#initialize' do
     it 'creates a stage with a name' do
       expect(stage.name).to eq('test_stage')
     end
 
+    it 'stores reference to the task' do
+      expect(stage.task).to eq(mock_task)
+    end
+
     it 'initializes with nil result' do
       expect(stage.result).to be_nil
+    end
+
+    it 'defaults name to downcased class name' do
+      stage = described_class.new(task: mock_task)
+      expect(stage.name).to eq('functionaltasksupervisor::stage')
     end
   end
 
@@ -30,15 +40,16 @@ RSpec.describe FunctionalTaskSupervisor::Stage do
     end
 
     context 'when an exception occurs' do
-      let(:failing_stage) do
+      let(:failing_stage_class) do
         Class.new(described_class) do
           private
 
           def perform_work
             raise StandardError, 'Something went wrong'
           end
-        end.new('failing_stage')
+        end
       end
+      let(:failing_stage) { failing_stage_class.new(task: mock_task, name: 'failing_stage') }
 
       it 'captures the exception in a Failure result' do
         failing_stage.execute
@@ -147,15 +158,16 @@ RSpec.describe FunctionalTaskSupervisor::Stage do
   end
 
   describe 'custom stage implementation' do
-    let(:custom_stage) do
+    let(:custom_stage_class) do
       Class.new(described_class) do
         private
 
         def perform_work
           Dry::Monads::Success(custom_data: 'custom value')
         end
-      end.new('custom_stage')
+      end
     end
+    let(:custom_stage) { custom_stage_class.new(task: mock_task, name: 'custom_stage') }
 
     it 'allows overriding perform_work' do
       custom_stage.execute
@@ -164,11 +176,11 @@ RSpec.describe FunctionalTaskSupervisor::Stage do
   end
 
   describe 'preconditions' do
-    let(:conditional_stage) do
+    let(:conditional_stage_class) do
       Class.new(described_class) do
         attr_accessor :condition_met
 
-        def initialize(name)
+        def initialize(task:, name: self.class.name.downcase)
           super
           @condition_met = true
         end
@@ -178,8 +190,9 @@ RSpec.describe FunctionalTaskSupervisor::Stage do
         def preconditions_met?
           @condition_met
         end
-      end.new('conditional_stage')
+      end
     end
+    let(:conditional_stage) { conditional_stage_class.new(task: mock_task, name: 'conditional_stage') }
 
     it 'executes when preconditions are met' do
       conditional_stage.condition_met = true

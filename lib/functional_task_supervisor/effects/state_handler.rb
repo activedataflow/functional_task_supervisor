@@ -19,20 +19,23 @@ module FunctionalTaskSupervisor
       # Run task with state tracking
       def run_with_state
         @results = []
+        @executed_stages = []
         @current_stage_index = 0
 
         # Initialize state
         self.stage_history = [] if stage_history.nil? || stage_history.empty?
         self.stage_metadata = {} if stage_metadata.nil? || stage_metadata.empty?
 
-        stages.each_with_index do |stage, index|
+        stage_klass_sequence.each_with_index do |stage_klass, index|
           @current_stage_index = index
-          
+          stage = stage_klass.new(task: self)
+          @executed_stages << stage
+
           # Track stage execution
           self.stage_history += [stage.name]
-          
+
           # Execute stage
-          stage_result = yield execute_stage(stage)
+          stage_result = execute_stage(stage)
           @results << stage_result
 
           # Store metadata
@@ -43,11 +46,14 @@ module FunctionalTaskSupervisor
             timestamp: Time.now
           }
           self.stage_metadata = metadata
+
+          # Stop on failure (mimics do-notation behavior)
+          return stage_result if stage_result.failure?
         end
 
         Success(
           results: @results,
-          completed: stages.map(&:name),
+          completed: @executed_stages.map(&:name),
           history: stage_history,
           metadata: stage_metadata
         )

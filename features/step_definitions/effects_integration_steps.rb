@@ -1,26 +1,54 @@
-Given('I have a task with state tracking') do
-  task_class = Class.new(FunctionalTaskSupervisor::Task) do
-    include FunctionalTaskSupervisor::Effects::StateHandler
+# Simple mock logger for testing
+class MockLogger
+  attr_reader :messages
+
+  def initialize
+    @messages = []
   end
-  @task = task_class.new
+
+  def info(msg)
+    @messages << { level: :info, message: msg }
+  end
+
+  def warn(msg)
+    @messages << { level: :warn, message: msg }
+  end
+
+  def error(msg)
+    @messages << { level: :error, message: msg }
+  end
+
+  def debug(msg)
+    @messages << { level: :debug, message: msg }
+  end
+
+  def received?(level, message)
+    @messages.any? { |m| m[:level] == level && m[:message] == message }
+  end
+end
+
+Given('I have a task with state tracking') do
+  create_task_with_state
+  @logger = MockLogger.new
 end
 
 Given('I have a task with dependency injection') do
-  @task = FunctionalTaskSupervisor::Task.new
-  @logger = double('Logger', info: nil, error: nil, warn: nil, debug: nil)
+  create_task
+  @logger = MockLogger.new
 end
 
 Given('I have a task with combined effects') do
-  task_class = Class.new(FunctionalTaskSupervisor::Task) do
-    include FunctionalTaskSupervisor::Effects::StateHandler
-  end
-  @task = task_class.new
-  @logger = double('Logger', info: nil, error: nil, warn: nil, debug: nil)
+  create_task_with_state
+  @logger = MockLogger.new
 end
 
 Given('I add a stage that uses logger') do
   stage_class = Class.new(FunctionalTaskSupervisor::Stage) do
     include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+    define_method(:initialize) do |task:|
+      super(task: task, name: 'logging_stage')
+    end
 
     private
 
@@ -29,13 +57,16 @@ Given('I add a stage that uses logger') do
       Dry::Monads::Success(data: 'completed')
     end
   end
-  @stage = stage_class.new('logging_stage')
-  @task.add_stage(@stage)
+  add_stage_class_to_task(stage_class)
 end
 
 Given('I add stages that use dependencies and state') do
-  stage_class = Class.new(FunctionalTaskSupervisor::Stage) do
+  stage1_class = Class.new(FunctionalTaskSupervisor::Stage) do
     include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+    define_method(:initialize) do |task:|
+      super(task: task, name: 'stage1')
+    end
 
     private
 
@@ -45,13 +76,32 @@ Given('I add stages that use dependencies and state') do
     end
   end
 
-  @task.add_stage(stage_class.new('stage1'))
-  @task.add_stage(stage_class.new('stage2'))
+  stage2_class = Class.new(FunctionalTaskSupervisor::Stage) do
+    include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+    define_method(:initialize) do |task:|
+      super(task: task, name: 'stage2')
+    end
+
+    private
+
+    def perform_work
+      log('Processing')
+      Dry::Monads::Success(data: 'done')
+    end
+  end
+
+  add_stage_class_to_task(stage1_class)
+  add_stage_class_to_task(stage2_class)
 end
 
 Given('I add a failing stage with logging') do
   stage_class = Class.new(FunctionalTaskSupervisor::Stage) do
     include FunctionalTaskSupervisor::Effects::ResolveHandler
+
+    define_method(:initialize) do |task:|
+      super(task: task, name: 'failing_stage')
+    end
 
     private
 
@@ -60,8 +110,7 @@ Given('I add a failing stage with logging') do
       Dry::Monads::Failure(error: 'Intentional failure')
     end
   end
-  @failing_stage = stage_class.new('failing_stage')
-  @task.add_stage(@failing_stage)
+  add_stage_class_to_task(stage_class)
 end
 
 When('I run the task with state handler') do
@@ -81,13 +130,13 @@ end
 
 Then('the execution history should contain all stage names') do
   history = @handler_result[:history]
-  expected_names = @task.stages.map(&:name)
+  expected_names = @task.executed_stages.map(&:name)
   expect(history).to eq(expected_names)
 end
 
 Then('the metadata should track each stage execution') do
   metadata = @handler_result[:metadata]
-  @task.stages.each do |stage|
+  @task.executed_stages.each do |stage|
     expect(metadata).to have_key(stage.name)
     expect(metadata[stage.name]).to include(:index, :success, :timestamp)
   end
@@ -98,7 +147,7 @@ Then('the stage should have access to the logger') do
 end
 
 Then('the logger should record stage execution') do
-  expect(@logger).to have_received(:info).with('[logging_stage] Executing stage')
+  expect(@logger.received?(:info, '[logging_stage] Executing stage')).to be true
 end
 
 Then('the history should be tracked') do
@@ -106,7 +155,7 @@ Then('the history should be tracked') do
 end
 
 Then('the dependencies should be available') do
-  expect(@logger).to have_received(:info).at_least(:once)
+  expect(@logger.messages.any? { |m| m[:level] == :info }).to be true
 end
 
 Then('all effects should work together') do
@@ -121,5 +170,5 @@ Then('the failure should be tracked in metadata') do
 end
 
 Then('the failure should be logged') do
-  expect(@logger).to have_received(:error).with('[failing_stage] About to fail')
+  expect(@logger.received?(:error, '[failing_stage] About to fail')).to be true
 end

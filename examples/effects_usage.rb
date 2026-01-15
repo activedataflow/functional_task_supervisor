@@ -9,10 +9,6 @@ puts "=" * 60
 puts "Example 1: State Tracking with Effects"
 puts "=" * 60
 
-class TaskWithState < FunctionalTaskSupervisor::Task
-  include FunctionalTaskSupervisor::Effects::StateHandler
-end
-
 class SimpleStage < FunctionalTaskSupervisor::Stage
   private
 
@@ -23,11 +19,19 @@ class SimpleStage < FunctionalTaskSupervisor::Stage
   end
 end
 
-task1 = TaskWithState.new
-task1.add_stage(SimpleStage.new('stage1'))
-     .add_stage(SimpleStage.new('stage2'))
-     .add_stage(SimpleStage.new('stage3'))
+class Stage1 < SimpleStage; end
+class Stage2 < SimpleStage; end
+class Stage3 < SimpleStage; end
 
+class TaskWithState < FunctionalTaskSupervisor::Task
+  include FunctionalTaskSupervisor::Effects::StateHandler
+
+  def stage_klass_sequence
+    [Stage1, Stage2, Stage3]
+  end
+end
+
+task1 = TaskWithState.new
 runner = FunctionalTaskSupervisor::Effects::StateTaskRunner.new
 result = runner.call(task1)
 
@@ -56,16 +60,22 @@ class LoggingStage < FunctionalTaskSupervisor::Stage
   end
 end
 
+class LoggingStage1 < LoggingStage; end
+class LoggingStage2 < LoggingStage; end
+
+class TaskWithLogging < FunctionalTaskSupervisor::Task
+  def stage_klass_sequence
+    [LoggingStage1, LoggingStage2]
+  end
+end
+
 logger = Logger.new($stdout)
 logger.level = Logger::INFO
 logger.formatter = proc do |severity, datetime, progname, msg|
   "  [LOG] #{severity}: #{msg}\n"
 end
 
-task2 = FunctionalTaskSupervisor::Task.new
-task2.add_stage(LoggingStage.new('logging_stage1'))
-     .add_stage(LoggingStage.new('logging_stage2'))
-
+task2 = TaskWithLogging.new
 provider = FunctionalTaskSupervisor::Effects::DependencyProvider.new(logger: logger)
 result2 = provider.call(task2)
 
@@ -84,24 +94,28 @@ class AdvancedStage < FunctionalTaskSupervisor::Stage
   def perform_work
     log("Processing #{name}")
     sleep(0.3)
-    
+
     # Simulate some work
     result_data = { processed: true, timestamp: Time.now }
-    
+
     log("Completed #{name}", level: :info)
     Success(data: result_data)
   end
 end
 
+class Advanced1 < AdvancedStage; end
+class Advanced2 < AdvancedStage; end
+class Advanced3 < AdvancedStage; end
+
 class TaskWithBothEffects < FunctionalTaskSupervisor::Task
   include FunctionalTaskSupervisor::Effects::StateHandler
+
+  def stage_klass_sequence
+    [Advanced1, Advanced2, Advanced3]
+  end
 end
 
 task3 = TaskWithBothEffects.new
-task3.add_stage(AdvancedStage.new('advanced1'))
-     .add_stage(AdvancedStage.new('advanced2'))
-     .add_stage(AdvancedStage.new('advanced3'))
-
 combined_runner = FunctionalTaskSupervisor::Effects::TaskRunner.new(
   logger: logger,
   config: { timeout: 30, retries: 3 }
@@ -132,11 +146,18 @@ class FailingStageWithLogging < FunctionalTaskSupervisor::Stage
   end
 end
 
-task4 = TaskWithBothEffects.new
-task4.add_stage(AdvancedStage.new('before_failure'))
-     .add_stage(FailingStageWithLogging.new('failing_stage'))
-     .add_stage(AdvancedStage.new('after_failure'))
+class BeforeFailure < AdvancedStage; end
+class AfterFailure < AdvancedStage; end
 
+class TaskWithFailure < FunctionalTaskSupervisor::Task
+  include FunctionalTaskSupervisor::Effects::StateHandler
+
+  def stage_klass_sequence
+    [BeforeFailure, FailingStageWithLogging, AfterFailure]
+  end
+end
+
+task4 = TaskWithFailure.new
 result4 = combined_runner.call(task4)
 
 puts "\n✗ Task failed as expected!"
@@ -177,20 +198,26 @@ class RepositoryStage < FunctionalTaskSupervisor::Stage
 
   def perform_work
     log("Using repository in #{name}")
-    
+
     # Use injected repository
     repo.save(name, "data_#{name}")
     fetched = repo.fetch(name)
-    
+
     Success(data: fetched)
   end
 end
 
-repository = MockRepository.new
-task5 = FunctionalTaskSupervisor::Task.new
-task5.add_stage(RepositoryStage.new('repo_stage1'))
-     .add_stage(RepositoryStage.new('repo_stage2'))
+class RepoStage1 < RepositoryStage; end
+class RepoStage2 < RepositoryStage; end
 
+class TaskWithRepository < FunctionalTaskSupervisor::Task
+  def stage_klass_sequence
+    [RepoStage1, RepoStage2]
+  end
+end
+
+repository = MockRepository.new
+task5 = TaskWithRepository.new
 repo_provider = FunctionalTaskSupervisor::Effects::DependencyProvider.new(
   logger: logger,
   repository: repository

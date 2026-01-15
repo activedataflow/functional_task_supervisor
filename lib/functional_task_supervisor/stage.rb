@@ -81,7 +81,7 @@ module FunctionalTaskSupervisor
       if recoverable?(failure)
         retry_with_backoff
       else
-        failure
+        Failure(failure)
       end
     end
 

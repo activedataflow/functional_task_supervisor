@@ -3,23 +3,24 @@ Given('I have a task') do
 end
 
 Given('I add a stage named {string}') do |stage_name|
-  stage = create_stage(stage_name)
-  add_stage_to_task(stage)
+  stage_class = create_stage_class(stage_name)
+  add_stage_class_to_task(stage_class)
 end
 
 Given('I add a failing stage named {string}') do |stage_name|
-  stage = create_custom_stage(stage_name) do
+  stage_class = create_custom_stage_class(stage_name) do
     Dry::Monads::Failure(error: 'Stage failed', stage: stage_name)
   end
-  add_stage_to_task(stage)
+  add_stage_class_to_task(stage_class)
 end
 
 Given('I add a custom stage that returns specific data') do
   @custom_data = { custom: 'data', value: 42 }
-  stage = create_custom_stage('custom_stage') do
-    Dry::Monads::Success(@custom_data)
+  custom_data = @custom_data
+  stage_class = create_custom_stage_class('custom_stage') do
+    Dry::Monads::Success(custom_data)
   end
-  add_stage_to_task(stage)
+  add_stage_class_to_task(stage_class)
 end
 
 When('I run the task') do
@@ -47,32 +48,32 @@ Then('the task should fail') do
 end
 
 Then('all stages should be executed') do
-  expect(task.stages.all?(&:performed?)).to be true
+  expect(task.executed_stages.all?(&:performed?)).to be true
 end
 
 Then('the result should include all stage names') do
   stage_names = task_result.value![:completed]
-  expected_names = task.stages.map(&:name)
+  expected_names = task.executed_stages.map(&:name)
   expect(stage_names).to eq(expected_names)
 end
 
 Then('only executed stages should be in results') do
   expect(task.results).not_to be_empty
-  expect(task.results.length).to be <= task.stages.length
+  expect(task.results.length).to be <= task.stage_klass_sequence.length
 end
 
 Then('the stage {string} should be marked as performed') do |stage_name|
-  stage = task.stages.find { |s| s.name == stage_name }
+  stage = task.executed_stages.find { |s| s.name == stage_name }
   expect(stage.performed?).to be true
 end
 
 Then('the stage {string} should be successful') do |stage_name|
-  stage = task.stages.find { |s| s.name == stage_name }
+  stage = task.executed_stages.find { |s| s.name == stage_name }
   expect(stage.success?).to be true
 end
 
 Then('no stages should be marked as performed') do
-  expect(task.stages.none?(&:performed?)).to be true
+  expect(task.executed_stages).to be_empty
 end
 
 Then('the results should be empty') do
