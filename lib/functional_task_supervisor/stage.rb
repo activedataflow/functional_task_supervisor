@@ -4,9 +4,10 @@ module FunctionalTaskSupervisor
   class Stage
     include Dry::Monads[:result]
 
-    attr_reader :name, :result
+    attr_reader :name, :task, :result
 
-    def initialize(name)
+    def initialize(task:, name: self.class.name.downcase)
+      @task = task
       @name = name
       @result = nil  # Not run yet
     end

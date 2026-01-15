@@ -1,4 +1,4 @@
-# FunctionalTaskSupervisor
+# FunctionalTaskSupervisor - FTS
 
 A Ruby gem that implements multi-stage task lifecycle using **dry-monads** Result types and **dry-effects** for composable, testable task execution.
 
@@ -33,57 +33,79 @@ gem install functional_task_supervisor
 
 ## Quick Start
 
-### Basic Usage
+FTS Tasks can be as simple as a read from one API and a write to another.
 
 ```ruby
 require 'functional_task_supervisor'
 
-# Define custom stages
-class FetchDataStage < FunctionalTaskSupervisor::Stage
-  private
+class Task < FunctionalTaskSupervisor::Task
+  attr_acccessor :data # data passed between stages is encapsulated in task
 
-  def perform_work
-    data = fetch_from_api
-    Success(data: data)
-  rescue StandardError => e
-    Failure(error: e.message)
+  # Define fetch stage
+  class Fetch < FunctionalTaskSupervisor::Stage
+
+    def perform_work
+      task.data = fetch_from_api # 'task' reference is provided by the task initialization logic
+      Success(data: data) # Monadic
+    rescue StandardError => e
+      Failure(error: e.message) # Monadic
+    end
+    
+    private
+
+    def fetch_from_api
+      # 'task' reference is provided by the task initialization logic
+      # Your API logic here like 
+      task.data = Api.get
+    end
   end
 
-  def fetch_from_api
-    # Your API logic here
-    { users: ['Alice', 'Bob'] }
+  # Define put stage
+  class Put < FunctionalTaskSupervisor::Stage
+
+    def perform_work
+      put_data_to_api
+      Success(data: data) # Monadic
+    rescue StandardError => e
+      Failure(error: e.message) # Monadic
+    end
+    
+    private
+
+    def put_data_to_api
+      # 'task' reference is provided by the task initialization logic
+      # Your API logic here
+      Api.put(task.data)
+    end
+  end
+  
+  def stage_klass_sequence
+    [Fetch,Put]
   end
 end
 
-class ProcessDataStage < FunctionalTaskSupervisor::Stage
-  private
+Task.new.run # does the work!
 
-  def perform_work
-    processed = process_data
-    Success(data: processed)
-  end
-
-  def process_data
-    # Your processing logic here
-    { processed: true }
-  end
-end
-
-# Create and run task
-task = FunctionalTaskSupervisor::Task.new
-task.add_stage(FetchDataStage.new('fetch'))
-task.add_stage(ProcessDataStage.new('process'))
-
-result = task.run
-
-case result
-when Dry::Monads::Success
-  puts "Task completed successfully!"
-  puts "Completed stages: #{result.value![:completed]}"
-when Dry::Monads::Failure
-  puts "Task failed: #{result.failure[:error]}"
-end
 ```
+
+FTS tasks define WHAT should be done, not WHEN it should be done.
+
+TypicaL USE CASES include:
+
+Data PUSH: Some external entity creates event
+  - it calls an endpoint with data stored in the HTTP body
+  - an FTS task is created (task=FTS.new(data: JSON_PAYLOAD))
+  - the FTS task holds the HTTP body in its original and transformed versions
+
+Data PULL: Some internal entity creates event (a TTL has expired, a user needs something etc)
+  - consumer creates an FTS task (task=FTS.new(data: JSON_PAYLOAD)
+  - proceeds as above
+
+In EITHER case:
+  - t.all_successful? => indicates the data content of the FTS is now redundant
+  - t.any_failed? => means that something wnt wrong. The FTS contains everything needed to:
+  - diagnose the problem
+  - rerun the stages that failed
 
 ## Core Concepts
 
@@ -119,11 +141,6 @@ A **Task** orchestrates the execution of multiple stages and determines the next
 
 ```ruby
 task = FunctionalTaskSupervisor::Task.new
-
-# Add stages
-task.add_stage(stage1)
-    .add_stage(stage2)
-    .add_stage(stage3)
 
 # Run all stages
 result = task.run
@@ -276,9 +293,6 @@ class ConditionalTask < FunctionalTaskSupervisor::Task
 end
 
 task = ConditionalTask.new
-task.add_stage(stage1)
-    .add_stage(stage2)
-    .add_stage(error_handler_stage)
 
 result = task.run_conditional
 ```
@@ -303,7 +317,8 @@ class RiskyStage < FunctionalTaskSupervisor::Stage
   end
 end
 
-stage = RiskyStage.new('risky')
+t = Task.new
+stage = RiskyStage.new(task:t)
 stage.execute
 
 if stage.failure?
@@ -322,7 +337,8 @@ end
 require 'spec_helper'
 
 RSpec.describe MyCustomStage do
-  let(:stage) { described_class.new('test_stage') }
+  let(:task) { FunctionalTaskSupervisor::Stage.new }
+  let(:stage) { described_class.new(task: task) }
 
   it 'executes successfully' do
     stage.execute

@@ -5,18 +5,16 @@ module FunctionalTaskSupervisor
   class Task
     include Dry::Monads[:result, :do]
 
-    attr_reader :stages, :results, :current_stage_index
+    attr_reader :results, :current_stage_index
 
     def initialize
-      @stages = []
       @results = []
       @current_stage_index = 0
     end
 
     # Add a stage to the task
-    def add_stage(stage)
-      @stages << stage
-      self
+    def stages
+      Failure('Subclasses must implement the stages method')
     end
 
     # Run all stages in sequence
@@ -24,8 +22,9 @@ module FunctionalTaskSupervisor
       @results = []
       @current_stage_index = 0
 
-      stages.each_with_index do |stage, index|
+      stage_klass_sequence.each_with_index do |stage_klass, index|
         @current_stage_index = index
+        stage = stage_klass.new(task: self)
         stage_result = yield execute_stage(stage)
         @results << stage_result
       end
@@ -43,7 +42,7 @@ module FunctionalTaskSupervisor
       @current_stage_index = 0
 
       while @current_stage_index < stages.length
-        stage = stages[@current_stage_index]
+        stage = stage_klass_sequence[@current_stage_index].new(task: self)
         stage_result = yield execute_stage(stage)
         @results << stage_result
 
@@ -95,7 +94,7 @@ module FunctionalTaskSupervisor
     private
 
     # Execute a single stage
-    def execute_stage(stage)
+    def execute_stage(stage_klass)
       stage.execute
       stage.result
     end
